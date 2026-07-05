@@ -1,6 +1,6 @@
-id,text,label,cleaned_text,emojis,emoji_count
-1,I am so happy today! 😊 #blessed,joy,i am so happy today! :smiling_face_with_smiling_eyes: blessed,😊,1
-2,This is terrible... I hate this situation,anger,this is terrible... i hate this situation,,0
-3,I feel sad and tired @user,sadness,i feel sad and tired,,0
-4,Check this link https://example.com amazing news!,joy,check this link amazing news!,,0
-5,I am afraid this will go wrong,fear,i am afraid this will go wrong,,0
+id,text,label,cleaned_text,text_with_emojis_as_words,language,emojis,emoji_count,emotion_labels,processing_version,original_text_length,cleaned_text_length,word_count,has_url,has_mention,has_hashtag
+1,I am so happy today! 😊 #blessed,joy,i am so happy today! :smiling_face_with_smiling_eyes: blessed,I am so happy today! :smiling_face_with_smiling_eyes: #blessed,unknown,😊,1,['joy'],v1,31,61,7,False,False,True
+2,This is terrible... I hate this situation,anger,this is terrible... i hate this situation,This is terrible... I hate this situation,unknown,,0,['anger'],v1,41,41,7,False,False,False
+3,I feel sad and tired @user,sadness,i feel sad and tired,I feel sad and tired @user,unknown,,0,['sadness'],v1,26,20,5,False,True,False
+4,Check this link https://example.com amazing news!,joy,check this link amazing news!,Check this link https://example.com amazing news!,unknown,,0,['joy'],v1,49,29,5,True,False,False
+5,I am afraid this will go wrong,fear,i am afraid this will go wrong,I am afraid this will go wrong,unknown,,0,['fear'],v1,30,30,7,False,False,False
