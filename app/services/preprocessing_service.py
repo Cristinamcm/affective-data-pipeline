@@ -42,6 +42,9 @@ def preprocess_csv_and_store(
     input_path: str,
     output_path: str,
     dataset_name: str,
+    text_column: str,
+    id_column: str | None = None,
+    label_column: str | None = None,
     source: str = "csv"
 ):
     input_file = Path(input_path)
@@ -59,6 +62,13 @@ def preprocess_csv_and_store(
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
         df = pd.read_csv(input_file)
+
+        df = prepare_dataframe_for_pipeline(
+            df=df,
+            text_column=text_column,
+            id_column=id_column,
+            label_column=label_column
+        )
 
         dataset = create_dataset(
             db=db,
@@ -116,3 +126,41 @@ def preprocess_csv_and_store(
         )
 
         raise error
+    
+
+def prepare_dataframe_for_pipeline(
+    df: pd.DataFrame,
+    text_column: str,
+    id_column: str | None = None,
+    label_column: str | None = None
+) -> pd.DataFrame:
+    """
+    Converte um dataset externo com colunas variáveis para a estrutura interna
+    esperada pelo pipeline: id, text e label.
+
+    A coluna text é obrigatória.
+    A coluna id e a coluna label são opcionais.
+    """
+
+    df = df.copy()
+
+    if text_column not in df.columns:
+        raise ValueError(
+            f"Text column '{text_column}' not found. Available columns: {list(df.columns)}"
+        )
+
+    normalized_df = pd.DataFrame()
+
+    if id_column and id_column in df.columns:
+        normalized_df["id"] = df[id_column]
+    else:
+        normalized_df["id"] = range(1, len(df) + 1)
+
+    normalized_df["text"] = df[text_column]
+
+    if label_column and label_column in df.columns:
+        normalized_df["label"] = df[label_column]
+    else:
+        normalized_df["label"] = None
+
+    return normalized_df

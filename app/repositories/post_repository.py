@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.models.models import (
     Dataset,
@@ -10,6 +10,7 @@ from app.models.models import (
     ProcessingRun
 )
 
+from sqlalchemy import case, func
 
 def create_processing_run(
     db: Session,
@@ -140,3 +141,160 @@ def create_post_with_processed_data(
     db.refresh(post)
 
     return post
+
+def get_datasets(db: Session, limit: int = 50, offset: int = 0):
+    return (
+        db.query(Dataset)
+        .order_by(Dataset.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+
+def get_dataset_by_id(db: Session, dataset_id: int):
+    return (
+        db.query(Dataset)
+        .filter(Dataset.id == dataset_id)
+        .first()
+    )
+
+
+def get_posts_by_dataset(
+    db: Session,
+    dataset_id: int,
+    limit: int = 100,
+    offset: int = 0
+):
+    return (
+        db.query(Post)
+        .options(
+            joinedload(Post.processed_post),
+            joinedload(Post.emotion_labels)
+        )
+        .filter(Post.dataset_id == dataset_id)
+        .order_by(Post.id.asc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+
+def get_processing_runs(db: Session, limit: int = 50, offset: int = 0):
+    return (
+        db.query(ProcessingRun)
+        .order_by(ProcessingRun.started_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+
+def get_dataset_summary(db: Session, dataset_id: int):
+    dataset = get_dataset_by_id(db, dataset_id)
+
+    if dataset is None:
+        return None
+
+    total_posts = (
+        db.query(func.count(Post.id))
+        .filter(Post.dataset_id == dataset_id)
+        .scalar()
+    )
+
+    processed_posts = (
+        db.query(func.count(ProcessedPost.id))
+        .join(Post, ProcessedPost.post_id == Post.id)
+        .filter(Post.dataset_id == dataset_id)
+        .scalar()
+    )
+
+    averages = (
+        db.query(
+            func.avg(ProcessedPost.word_count),
+            func.avg(ProcessedPost.emoji_count),
+            func.avg(ProcessedPost.original_text_length),
+            func.avg(ProcessedPost.cleaned_text_length)
+        )
+        .join(Post, ProcessedPost.post_id == Post.id)
+        .filter(Post.dataset_id == dataset_id)
+        .first()
+    )
+
+    social_counts = (
+        db.query(
+            func.sum(case((ProcessedPost.has_url == True, 1), else_=0)),
+            func.sum(case((ProcessedPost.has_mention == True, 1), else_=0)),
+            func.sum(case((ProcessedPost.has_hashtag == True, 1), else_=0))
+        )
+        .join(Post, ProcessedPost.post_id == Post.id)
+        .filter(Post.dataset_id == dataset_id)
+        .first()
+    )
+
+    language_distribution = (
+        db.query(
+            ProcessedPost.language,
+            func.count(ProcessedPost.id)
+        )
+        .join(Post, ProcessedPost.post_id == Post.id)
+        .filter(Post.dataset_id == dataset_id)
+        .group_by(ProcessedPost.language)
+        .all()
+    )
+
+    emotion_distribution = (
+        db.query(
+            EmotionLabel.emotion,
+            func.count(EmotionLabel.id)
+        )
+        .join(Post, EmotionLabel.post_id == Post.id)
+        .filter(Post.dataset_id == dataset_id)
+        .group_by(EmotionLabel.emotion)
+        .all()
+    )
+
+    multilabel_subquery = (
+        db.query(
+            EmotionLabel.post_id,
+            func.count(EmotionLabel.id).label("emotion_count")
+        )
+        .join(Post, EmotionLabel.post_id == Post.id)
+        .filter(Post.dataset_id == dataset_id)
+        .group_by(EmotionLabel.post_id)
+        .having(func.count(EmotionLabel.id) > 1)
+        .subquery()
+    )
+
+    multilabel_posts = (
+        db.query(func.count())
+        .select_from(multilabel_subquery)
+        .scalar()
+    )
+
+    return {
+        "dataset_id": dataset.id,
+        "dataset_name": dataset.name,
+        "source": dataset.source,
+        "original_filename": dataset.original_filename,
+        "rows_count": dataset.rows_count,
+        "created_at": dataset.created_at,
+        "total_posts": total_posts or 0,
+        "processed_posts": processed_posts or 0,
+        "avg_word_count": float(averages[0] or 0),
+        "avg_emoji_count": float(averages[1] or 0),
+        "avg_original_text_length": float(averages[2] or 0),
+        "avg_cleaned_text_length": float(averages[3] or 0),
+        "posts_with_url": int(social_counts[0] or 0),
+        "posts_with_mention": int(social_counts[1] or 0),
+        "posts_with_hashtag": int(social_counts[2] or 0),
+        "multilabel_posts": multilabel_posts or 0,
+        "language_distribution": {
+            language or "unknown": count
+            for language, count in language_distribution
+        },
+        "emotion_distribution": {
+            emotion: count
+            for emotion, count in emotion_distribution
+        }
+    }
