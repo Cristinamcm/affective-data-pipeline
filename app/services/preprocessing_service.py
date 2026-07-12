@@ -3,164 +3,101 @@ from pathlib import Path
 import pandas as pd
 from sqlalchemy.orm import Session
 
-from app.preprocessing.preprocessing_pipeline import preprocess_record
-from app.repositories.post_repository import (
-    create_dataset,
-    create_post_with_processed_data,
+from app.preprocessing.preprocessing_pipeline import preprocess_text
+from app.repositories.preprocessing_repository import (
     create_processing_run,
-    finish_processing_run
+    finish_processing_run,
+    get_dataset_by_id,
+    get_posts_by_dataset,
+    save_processed_post
 )
 
-
-def preprocess_csv(input_path: str, output_path: str):
-    input_file = Path(input_path)
-    output_file = Path(output_path)
-
-    if not input_file.exists():
-        raise FileNotFoundError(f"Input file not found: {input_path}")
-
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-
-    df = pd.read_csv(input_file)
-
-    records = df.to_dict(orient="records")
-    processed_records = [preprocess_record(record) for record in records]
-
-    processed_df = pd.DataFrame(processed_records)
-    processed_df.to_csv(output_file, index=False)
-
-    return {
-        "input_path": str(input_file),
-        "output_path": str(output_file),
-        "total_records": len(processed_df),
-        "columns": list(processed_df.columns)
-    }
+VALID_VARIANTS = ["minimal", "intermediate", "aggressive"]
 
 
-def preprocess_csv_and_store(
+def preprocess_dataset(
     db: Session,
-    input_path: str,
-    output_path: str,
-    dataset_name: str,
-    text_column: str,
-    id_column: str | None = None,
-    label_column: str | None = None,
-    source: str = "csv"
+    dataset_id: int,
+    variant: str
 ):
-    input_file = Path(input_path)
-    output_file = Path(output_path)
+    variant = variant.lower()
 
-    processing_run = create_processing_run(
+    if variant not in VALID_VARIANTS:
+        raise ValueError(
+            f"Invalid variant '{variant}'. Valid options: {VALID_VARIANTS}"
+        )
+
+    dataset = get_dataset_by_id(db, dataset_id)
+
+    if dataset is None:
+        raise ValueError("Dataset not found")
+
+    posts = get_posts_by_dataset(db, dataset_id)
+
+    run = create_processing_run(
         db=db,
-        input_filename=input_file.name
+        dataset_id=dataset_id,
+        variant=variant,
+        total_posts=len(posts)
     )
 
+    seen_texts = set()
+    duplicate_posts = 0
+    processed_posts = 0
+
     try:
-        if not input_file.exists():
-            raise FileNotFoundError(f"Input file not found: {input_path}")
+        for post in posts:
+            normalized_original = post.original_text.strip().lower()
 
-        output_file.parent.mkdir(parents=True, exist_ok=True)
+            is_duplicate = normalized_original in seen_texts
 
-        df = pd.read_csv(input_file)
+            if is_duplicate:
+                duplicate_posts += 1
+            else:
+                seen_texts.add(normalized_original)
 
-        df = prepare_dataframe_for_pipeline(
-            df=df,
-            text_column=text_column,
-            id_column=id_column,
-            label_column=label_column
-        )
-
-        dataset = create_dataset(
-            db=db,
-            name=dataset_name,
-            source=source,
-            original_filename=input_file.name,
-            rows_count=len(df)
-        )
-
-        records = df.to_dict(orient="records")
-        processed_records = []
-
-        for record in records:
-            processed_record = preprocess_record(record)
-            processed_records.append(processed_record)
-
-            create_post_with_processed_data(
-                db=db,
-                dataset_id=dataset.id,
-                record=record,
-                processed_record=processed_record
+            processed_data = preprocess_text(
+                text=post.original_text,
+                variant=variant
             )
 
-        processed_df = pd.DataFrame(processed_records)
-        processed_df.to_csv(output_file, index=False)
+            save_processed_post(
+                db=db,
+                post=post,
+                run=run,
+                processed_data=processed_data,
+                variant=variant,
+                is_duplicate=is_duplicate
+            )
+
+            processed_posts += 1
 
         finish_processing_run(
             db=db,
-            processing_run=processing_run,
-            dataset_id=dataset.id,
-            output_filename=output_file.name,
-            total_records=len(processed_df),
+            run=run,
+            processed_posts=processed_posts,
+            duplicate_posts=duplicate_posts,
             status="finished"
         )
 
         return {
-            "dataset_id": dataset.id,
-            "processing_run_id": processing_run.id,
-            "input_path": str(input_file),
-            "output_path": str(output_file),
-            "total_records": len(processed_df),
-            "columns": list(processed_df.columns),
-            "stored_in_database": True
+            "processing_run_id": run.id,
+            "dataset_id": dataset_id,
+            "variant": variant,
+            "total_posts": len(posts),
+            "processed_posts": processed_posts,
+            "duplicate_posts": duplicate_posts,
+            "status": "finished"
         }
 
     except Exception as error:
         finish_processing_run(
             db=db,
-            processing_run=processing_run,
-            dataset_id=None,
-            output_filename=output_file.name,
-            total_records=0,
+            run=run,
+            processed_posts=processed_posts,
+            duplicate_posts=duplicate_posts,
             status="failed",
             error_message=str(error)
         )
 
         raise error
-    
-
-def prepare_dataframe_for_pipeline(
-    df: pd.DataFrame,
-    text_column: str,
-    id_column: str | None = None,
-    label_column: str | None = None
-) -> pd.DataFrame:
-    """
-    Converte um dataset externo com colunas variáveis para a estrutura interna
-    esperada pelo pipeline: id, text e label.
-
-    A coluna text é obrigatória.
-    A coluna id e a coluna label são opcionais.
-    """
-
-    df = df.copy()
-
-    if text_column not in df.columns:
-        raise ValueError(
-            f"Text column '{text_column}' not found. Available columns: {list(df.columns)}"
-        )
-
-    normalized_df = pd.DataFrame()
-
-    if id_column and id_column in df.columns:
-        normalized_df["id"] = df[id_column]
-    else:
-        normalized_df["id"] = range(1, len(df) + 1)
-
-    normalized_df["text"] = df[text_column]
-
-    if label_column and label_column in df.columns:
-        normalized_df["label"] = df[label_column]
-    else:
-        normalized_df["label"] = None
-
-    return normalized_df
