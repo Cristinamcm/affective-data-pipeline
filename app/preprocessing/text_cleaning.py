@@ -10,14 +10,23 @@ def normalize_unicode(text: str) -> str:
 
 
 def lowercase_text(text: str) -> str:
+    if not isinstance(text, str):
+        return ""
+
     return text.lower()
 
 
 def normalize_spaces(text: str) -> str:
+    if not isinstance(text, str):
+        return ""
+
     return re.sub(r"\s+", " ", text).strip()
 
 
 def replace_urls(text: str) -> str:
+    if not isinstance(text, str):
+        return ""
+
     return re.sub(
         r"(https?://\S+|www\.\S+)",
         " [URL] ",
@@ -26,6 +35,9 @@ def replace_urls(text: str) -> str:
 
 
 def anonymize_mentions(text: str) -> str:
+    if not isinstance(text, str):
+        return ""
+
     return re.sub(
         r"@\w+",
         " [USER] ",
@@ -33,36 +45,70 @@ def anonymize_mentions(text: str) -> str:
     )
 
 
+def extract_hashtags(text: str) -> list[str]:
+    if not isinstance(text, str):
+        return []
+
+    return re.findall(r"#(\w+)", text)
+
+
 def normalize_hashtags(text: str) -> str:
-    """
-    Remove o símbolo #, mas preserva o conteúdo textual da hashtag.
-    Exemplo: #happy -> happy
-    """
+    if not isinstance(text, str):
+        return ""
+
     return re.sub(r"#(\w+)", r"\1", text)
 
 
 def reduce_repeated_characters(text: str) -> str:
-    """
-    Reduz repetições longas de caracteres.
-    Exemplo: missssssssss -> miss
-    """
+    if not isinstance(text, str):
+        return ""
+
     return re.sub(r"(.)\1{2,}", r"\1\1", text)
 
 
+def remove_special_characters(text: str) -> str:
+    if not isinstance(text, str):
+        return ""
+
+    return re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", text)
+
+
 def remove_selected_punctuation(text: str) -> str:
-    """
-    Remove pontuação selecionada, mas preserva tokens anonimizados como URL e USER.
-    """
+    if not isinstance(text, str):
+        return ""
+
     text = re.sub(r"[^\w\s\[\]]", " ", text)
+
     return normalize_spaces(text)
 
 
-def detect_social_markers(text: str) -> dict:
+def count_urls(text: str) -> int:
     if not isinstance(text, str):
-        text = ""
+        return 0
 
+    return len(re.findall(r"(https?://\S+|www\.\S+)", text))
+
+
+def count_mentions(text: str) -> int:
+    if not isinstance(text, str):
+        return 0
+
+    return len(re.findall(r"@\w+", text))
+
+
+def count_hashtags(text: str) -> int:
+    if not isinstance(text, str):
+        return 0
+
+    return len(re.findall(r"#\w+", text))
+
+
+def detect_social_markers(text: str) -> dict:
     return {
-        "has_url": bool(re.search(r"https?://\S+|www\.\S+", text)),
-        "has_mention": bool(re.search(r"@\w+", text)),
-        "has_hashtag": "#" in text
+        "url_count": count_urls(text),
+        "mention_count": count_mentions(text),
+        "hashtag_count": count_hashtags(text),
+        "has_url": count_urls(text) > 0,
+        "has_mention": count_mentions(text) > 0,
+        "has_hashtag": count_hashtags(text) > 0
     }

@@ -78,11 +78,13 @@ class ProcessingRun(Base):
         index=True
     )
 
-    variant = Column(String(50), nullable=False)
+    configuration_name = Column(String(100), nullable=False, default="custom")
+    configuration_json = Column(Text, nullable=False)
 
     total_posts = Column(Integer, default=0)
-    processed_posts = Column(Integer, default=0)
+    processed_posts_count = Column(Integer, default=0)
     duplicate_posts = Column(Integer, default=0)
+    empty_after_processing = Column(Integer, default=0)
 
     status = Column(String(50), default="started")
     error_message = Column(Text, nullable=True)
@@ -118,25 +120,30 @@ class ProcessedPost(Base):
         index=True
     )
 
-    variant = Column(String(50), nullable=False)
-
     original_text = Column(Text, nullable=False)
     processed_text = Column(Text, nullable=False)
 
     tokens = Column(Text, nullable=True)
     emojis = Column(Text, nullable=True)
-    emoji_count = Column(Integer, default=0)
+    hashtags = Column(Text, nullable=True)
+    applied_steps = Column(Text, nullable=True)
 
     original_length = Column(Integer, default=0)
     processed_length = Column(Integer, default=0)
     word_count = Column(Integer, default=0)
+    token_count = Column(Integer, default=0)
 
     has_url = Column(Boolean, default=False)
     has_mention = Column(Boolean, default=False)
     has_hashtag = Column(Boolean, default=False)
-    is_duplicate = Column(Boolean, default=False)
 
-    applied_steps = Column(Text, nullable=True)
+    url_count = Column(Integer, default=0)
+    mention_count = Column(Integer, default=0)
+    hashtag_count = Column(Integer, default=0)
+    emoji_count = Column(Integer, default=0)
+
+    is_duplicate = Column(Boolean, default=False)
+    is_empty_after_processing = Column(Boolean, default=False)
 
     processed_at = Column(DateTime, default=datetime.utcnow)
 

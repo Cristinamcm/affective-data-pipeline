@@ -59,10 +59,6 @@ def remove_stopwords(tokens: list[str]) -> list[str]:
 
 
 def stem_tokens(tokens: list[str]) -> list[str]:
-    """
-    Aplica stemming simples com NLTK.
-    Caso o NLTK não esteja instalado, devolve os tokens originais.
-    """
     try:
         from nltk.stem import PorterStemmer
     except ImportError:
@@ -70,8 +66,35 @@ def stem_tokens(tokens: list[str]) -> list[str]:
 
     stemmer = PorterStemmer()
 
-    return [
-        stemmer.stem(token)
-        for token in tokens
-        if token not in ["[URL]", "[USER]"]
-    ]
+    stemmed_tokens = []
+
+    for token in tokens:
+        if token in ["[URL]", "[USER]"]:
+            stemmed_tokens.append(token)
+        else:
+            stemmed_tokens.append(stemmer.stem(token))
+
+    return stemmed_tokens
+
+
+def lemmatize_tokens(tokens: list[str]) -> list[str]:
+    try:
+        from nltk.stem import WordNetLemmatizer
+    except ImportError:
+        return tokens
+
+    lemmatizer = WordNetLemmatizer()
+
+    lemmatized_tokens = []
+
+    try:
+        for token in tokens:
+            if token in ["[URL]", "[USER]"]:
+                lemmatized_tokens.append(token)
+            else:
+                lemmatized_tokens.append(lemmatizer.lemmatize(token))
+
+        return lemmatized_tokens
+
+    except LookupError:
+        return tokens
