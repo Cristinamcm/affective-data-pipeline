@@ -1,3 +1,18 @@
+"""
+Endpoints associados à gestão e consulta de datasets.
+
+Este módulo disponibiliza operações para:
+
+- pré-visualizar ficheiros CSV existentes na área de armazenamento bruto;
+- importar um ficheiro CSV para a base de dados;
+- listar os datasets registados;
+- consultar os metadados de um dataset;
+- consultar as publicações originais de um dataset.
+
+A camada de API valida os parâmetros recebidos e delega as operações de
+persistência ao dataset_repository.
+"""
+
 from pathlib import Path
 
 import pandas as pd
@@ -13,11 +28,18 @@ from app.repositories.dataset_repository import (
 )
 
 
+# Router responsável pelos endpoints relacionados com datasets.
+#
+# Todos os endpoints definidos neste módulo ficam acessíveis através
+# do prefixo /datasets e agrupados sob a etiqueta "Datasets" na
+# documentação automática do FastAPI.
 router = APIRouter(prefix="/datasets", tags=["Datasets"])
 
+# Diretório utilizado para armazenar os ficheiros CSV na sua forma original,
+# antes da importação e estruturação na base de dados.
 RAW_DATA_DIR = Path("data/raw")
 
-
+# rota para fazer o preview do csv
 @router.get("/csv/preview")
 def preview_csv(
     input_filename: str = Query(...)
@@ -40,6 +62,7 @@ def preview_csv(
     }
 
 
+#importação do dataset csv para a base de dados
 @router.post("/import-csv")
 def import_csv_dataset(
     input_filename: str = Query(...),
@@ -97,8 +120,19 @@ def import_csv_dataset(
 def list_datasets(
     db: Session = Depends(get_db)
 ):
-    datasets = get_datasets(db)
+    """
+    Lista todos os datasets registados no sistema.
 
+    Os resultados são devolvidos do dataset mais recente para o mais antigo.
+
+    Args:
+        db: Sessão SQLAlchemy disponibilizada pelo FastAPI.
+
+    Returns:
+        list[dict]: Lista com os metadados dos datasets registados.
+    """    
+    datasets = get_datasets(db)
+    # Converte cada modelo ORM numa estrutura serializável para JSON.
     return [
         {
             "id": dataset.id,
@@ -119,6 +153,19 @@ def get_dataset(
     dataset_id: int,
     db: Session = Depends(get_db)
 ):
+    """
+    Obtém os metadados de um dataset específico.
+
+    Args:
+        dataset_id: Identificador interno do dataset.
+        db: Sessão SQLAlchemy disponibilizada pelo FastAPI.
+
+    Returns:
+        dict: Metadados do dataset encontrado.
+
+    Raises:
+        HTTPException: Quando não existe um dataset com o ID indicado.
+    """    
     dataset = get_dataset_by_id(db, dataset_id)
 
     if dataset is None:
@@ -146,6 +193,24 @@ def list_dataset_posts(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db)
 ):
+    """
+    Obtém uma página das publicações originais de um dataset.
+
+    A paginação evita devolver todas as publicações de datasets grandes num
+    único pedido HTTP.
+
+    Args:
+        dataset_id: Identificador do dataset.
+        limit: Número máximo de publicações devolvidas.
+        offset: Número de publicações ignoradas antes da página atual.
+        db: Sessão SQLAlchemy disponibilizada pelo FastAPI.
+
+    Returns:
+        list[dict]: Publicações originais da página solicitada.
+
+    Raises:
+        HTTPException: Quando o dataset não existe.
+    """
     dataset = get_dataset_by_id(db, dataset_id)
 
     if dataset is None:
