@@ -3,14 +3,15 @@ Página de consulta e pré-visualização dos dados brutos.
 
 Esta página permite ao utilizador:
 
-- consultar os datasets já importados;
-- selecionar um dataset;
+- consultar os conjuntos de dados importados;
+- selecionar um conjunto de dados;
 - visualizar os respetivos metadados;
-- consultar as publicações originais armazenadas na base de dados;
-- navegar pelos registos através de paginação.
+- consultar os registos originais;
+- visualizar os rótulos originais, quando existentes;
+- navegar pelos dados através de paginação.
 
-Os dados apresentados nesta página ainda não foram submetidos ao pipeline
-de pré-processamento.
+Os conteúdos apresentados correspondem aos dados brutos preservados antes
+da aplicação do pipeline de pré-processamento.
 """
 
 import math
@@ -21,88 +22,89 @@ import requests
 import streamlit as st
 
 
-# Endereço base do backend FastAPI.
-#
-# A variável de ambiente permite utilizar diferentes endereços consoante
-# o ambiente de execução. Quando não está definida, é utilizado o backend local.
+# =============================================================================
+# CONFIGURAÇÃO
+# =============================================================================
+
 API_BASE_URL = os.getenv(
     "API_BASE_URL",
     "http://127.0.0.1:8000"
 )
 
 
-def get_error_detail(response: requests.Response) -> str:
+# =============================================================================
+# FUNÇÕES AUXILIARES
+# =============================================================================
+
+def get_error_detail(
+    response: requests.Response
+) -> str:
     """
     Obtém a mensagem de erro devolvida pelo backend.
-
-    Quando a resposta contém JSON no formato utilizado pelo FastAPI, é extraído
-    o campo ``detail``. Caso contrário, é devolvido o conteúdo textual.
-
-    Args:
-        response: Resposta HTTP recebida.
-
-    Returns:
-        str: Mensagem de erro interpretada.
     """
 
     try:
+
         response_data = response.json()
-        return str(response_data.get("detail", response_data))
+
+        return str(
+            response_data.get(
+                "detail",
+                response_data
+            )
+        )
+
     except ValueError:
+
         return response.text
+
+
+def get_json(
+    endpoint: str,
+    params: dict | None = None,
+    timeout: int = 30
+):
+    """
+    Executa um pedido GET à API.
+    """
+
+    response = requests.get(
+        f"{API_BASE_URL}{endpoint}",
+        params=params,
+        timeout=timeout
+    )
+
+    if response.status_code != 200:
+
+        raise RuntimeError(
+            get_error_detail(
+                response
+            )
+        )
+
+    return response.json()
 
 
 def get_datasets() -> list[dict]:
     """
-    Obtém a lista de datasets registados no sistema.
-
-    Returns:
-        list[dict]: Metadados dos datasets existentes.
-
-    Raises:
-        RuntimeError: Quando o backend devolve uma resposta sem sucesso.
+    Obtém os conjuntos de dados registados.
     """
 
-    response = requests.get(
-        f"{API_BASE_URL}/datasets",
-        timeout=30
+    return get_json(
+        "/datasets"
     )
 
-    if response.status_code != 200:
-        raise RuntimeError(
-            "Não foi possível obter a lista de datasets. "
-            f"Detalhe: {get_error_detail(response)}"
-        )
 
-    return response.json()
-
-
-def get_dataset(dataset_id: int) -> dict:
+def get_dataset(
+    dataset_id: int
+) -> dict:
     """
-    Obtém os metadados de um dataset específico.
-
-    Args:
-        dataset_id: Identificador interno do dataset.
-
-    Returns:
-        dict: Metadados do dataset.
-
-    Raises:
-        RuntimeError: Quando o dataset não pode ser consultado.
+    Obtém os metadados de um conjunto de dados.
     """
 
-    response = requests.get(
-        f"{API_BASE_URL}/datasets/{dataset_id}",
-        timeout=30
+    return get_json(
+        f"/datasets/{dataset_id}"
     )
-
-    if response.status_code != 200:
-        raise RuntimeError(
-            "Não foi possível obter a informação do dataset. "
-            f"Detalhe: {get_error_detail(response)}"
-        )
-
-    return response.json()
 
 
 def get_dataset_posts(
@@ -111,160 +113,303 @@ def get_dataset_posts(
     offset: int
 ) -> list[dict]:
     """
-    Obtém uma página das publicações originais de um dataset.
-
-    Args:
-        dataset_id: Identificador do dataset.
-        limit: Número máximo de publicações a devolver.
-        offset: Número de publicações anteriores a ignorar.
-
-    Returns:
-        list[dict]: Publicações da página solicitada.
-
-    Raises:
-        RuntimeError: Quando os registos não podem ser consultados.
+    Obtém uma página dos registos originais.
     """
 
-    response = requests.get(
-        f"{API_BASE_URL}/datasets/{dataset_id}/posts",
+    return get_json(
+        f"/datasets/{dataset_id}/posts",
         params={
             "limit": limit,
             "offset": offset
-        },
-        timeout=30
+        }
     )
 
-    if response.status_code != 200:
-        raise RuntimeError(
-            "Não foi possível obter as publicações do dataset. "
-            f"Detalhe: {get_error_detail(response)}"
-        )
 
-    return response.json()
+# =============================================================================
+# INTERFACE
+# =============================================================================
 
-
-# -------------------------------------------------------------------------
-# Configuração visual da página
-# -------------------------------------------------------------------------
-
-st.title("Pré-visualização dos Dados")
+st.title(
+    "Pré-visualização dos Dados"
+)
 
 st.markdown(
     """
-    Nesta página é possível consultar os datasets já importados e visualizar
-    os dados brutos preservados na base de dados antes da aplicação das
-    operações de pré-processamento.
+    Nesta página é possível consultar os conjuntos de dados já importados e
+    visualizar os dados brutos preservados na base de dados antes da aplicação
+    das operações de pré-processamento.
     """
 )
 
 
 try:
-    # Obtém os datasets registados para preencher o componente de seleção.
+
     datasets = get_datasets()
 
+
     if not datasets:
+
         st.info(
-            "Ainda não existem datasets guardados na base de dados."
+            "Ainda não existem conjuntos de dados guardados."
         )
+
         st.stop()
 
-    # Associa o texto apresentado na interface ao identificador interno
-    # utilizado nos pedidos enviados ao backend.
+
+    # =========================================================================
+    # SELEÇÃO DO CONJUNTO DE DADOS
+    # =========================================================================
+
     dataset_options = {
-        f"{dataset['id']} - {dataset['name']}": dataset["id"]
+        (
+            f"{dataset['id']} - "
+            f"{dataset['name']}"
+        ): dataset["id"]
         for dataset in datasets
     }
 
+
     selected_dataset_label = st.selectbox(
-        "Selecionar dataset",
-        options=list(dataset_options.keys())
+        "Selecionar conjunto de dados",
+        options=list(
+            dataset_options.keys()
+        )
     )
 
-    selected_dataset_id = dataset_options[selected_dataset_label]
 
-    # Obtém a informação detalhada do dataset selecionado.
-    dataset = get_dataset(selected_dataset_id)
+    selected_dataset_id = (
+        dataset_options[
+            selected_dataset_label
+        ]
+    )
 
-    # ---------------------------------------------------------------------
-    # Metadados do dataset
-    # ---------------------------------------------------------------------
 
-    st.subheader("Informação do dataset")
+    dataset = get_dataset(
+        selected_dataset_id
+    )
+
+
+    # =========================================================================
+    # RESUMO
+    # =========================================================================
+
+    st.subheader(
+        "Informação do conjunto de dados"
+    )
+
 
     col1, col2, col3 = st.columns(3)
+
 
     col1.metric(
         "ID",
         dataset["id"]
     )
 
+
     col2.metric(
         "Registos",
-        dataset["rows_count"] or 0
+        dataset.get(
+            "rows_count"
+        ) or 0
     )
+
 
     col3.metric(
         "Fonte",
-        dataset["source"] or "Não indicada"
+        dataset.get(
+            "source"
+        )
+        or "Não indicada"
     )
 
-    st.write("Nome:")
-    st.code(dataset["name"])
 
-    st.write("Ficheiro original:")
-    st.code(dataset["original_filename"])
+    # =========================================================================
+    # METADADOS
+    # =========================================================================
 
-    st.write("Coluna de ID original:")
-    st.code(
-        dataset["id_column"]
-        or "Gerada automaticamente"
+    metadata = pd.DataFrame(
+        [
+            {
+                "Propriedade": "Nome",
+                "Valor": dataset.get(
+                    "name"
+                )
+            },
+            {
+                "Propriedade": "Ficheiro original",
+                "Valor": dataset.get(
+                    "original_filename"
+                )
+            },
+            {
+                "Propriedade": "Coluna de ID",
+                "Valor": (
+                    dataset.get(
+                        "id_column"
+                    )
+                    or "Gerada automaticamente"
+                )
+            },
+            {
+                "Propriedade": "Coluna de texto",
+                "Valor": dataset.get(
+                    "text_column"
+                )
+            },
+            {
+                "Propriedade": "Coluna de rótulo",
+                "Valor": (
+                    dataset.get(
+                        "label_column"
+                    )
+                    or "Não definida"
+                )
+            },
+            {
+                "Propriedade": "Idioma",
+                "Valor": (
+                    dataset.get(
+                        "language"
+                    )
+                    or "Não indicado"
+                )
+            },
+            {
+                "Propriedade": "Codificação",
+                "Valor": (
+                    dataset.get(
+                        "encoding"
+                    )
+                    or "Não indicada"
+                )
+            },
+            {
+                "Propriedade": "Delimitador",
+                "Valor": (
+                    dataset.get(
+                        "delimiter"
+                    )
+                    or "Não indicado"
+                )
+            },
+            {
+                "Propriedade": "Data de importação",
+                "Valor": dataset.get(
+                    "created_at"
+                )
+            }
+        ]
     )
 
-    st.write("Coluna de texto original:")
-    st.code(dataset["text_column"])
 
-    st.write("Data de importação:")
-    st.code(str(dataset["created_at"]))
+    st.dataframe(
+        metadata,
+        use_container_width=True,
+        hide_index=True
+    )
+
+
+    with st.expander(
+        "Informação de integridade e armazenamento"
+    ):
+
+        st.write(
+            "**Hash SHA-256 do ficheiro:**"
+        )
+
+        st.code(
+            dataset.get(
+                "file_hash"
+            )
+            or "Não disponível"
+        )
+
+
+        st.write(
+            "**Caminho do ficheiro bruto:**"
+        )
+
+        st.code(
+            dataset.get(
+                "raw_file_path"
+            )
+            or "Não disponível"
+        )
+
 
     st.divider()
 
-    # ---------------------------------------------------------------------
-    # Paginação das publicações
-    # ---------------------------------------------------------------------
 
-    st.subheader("Dados brutos armazenados")
+    # =========================================================================
+    # DADOS BRUTOS
+    # =========================================================================
 
-    total_records = int(dataset["rows_count"] or 0)
-
-    col_page_size, col_page_number = st.columns(2)
-
-    with col_page_size:
-        page_size = st.selectbox(
-            "Registos por página",
-            options=[25, 50, 100, 250, 500],
-            index=2,
-            key=f"raw_page_size_{selected_dataset_id}"
-        )
-
-    # Calcula o número total de páginas. É mantida pelo menos uma página
-    # para evitar valores inválidos no componente number_input.
-    total_pages = max(
-        1,
-        math.ceil(total_records / page_size)
+    st.subheader(
+        "Dados brutos armazenados"
     )
 
+
+    total_records = int(
+        dataset.get(
+            "rows_count"
+        )
+        or 0
+    )
+
+
+    col_page_size, col_page_number = (
+        st.columns(2)
+    )
+
+
+    with col_page_size:
+
+        page_size = st.selectbox(
+            "Registos por página",
+            options=[
+                25,
+                50,
+                100,
+                250,
+                500
+            ],
+            index=2,
+            key=(
+                f"raw_page_size_"
+                f"{selected_dataset_id}"
+            )
+        )
+
+
+    total_pages = max(
+        1,
+        math.ceil(
+            total_records
+            / page_size
+        )
+    )
+
+
     with col_page_number:
+
         page_number = st.number_input(
             "Página",
             min_value=1,
             max_value=total_pages,
             value=1,
             step=1,
-            key=f"raw_page_number_{selected_dataset_id}"
+            key=(
+                f"raw_page_number_"
+                f"{selected_dataset_id}"
+            )
         )
 
-    # O offset representa o número de registos a ignorar.
-    offset = (page_number - 1) * page_size
+
+    offset = (
+        int(page_number) - 1
+    ) * page_size
+
 
     posts = get_dataset_posts(
         dataset_id=selected_dataset_id,
@@ -272,65 +417,116 @@ try:
         offset=offset
     )
 
-    if posts:
-        df_posts = pd.DataFrame(posts)
 
-        # Seleciona explicitamente as colunas relevantes para a consulta
-        # dos dados brutos.
+    if not posts:
+
+        st.info(
+            "Não existem registos na página selecionada."
+        )
+
+    else:
+
+        df_posts = pd.DataFrame(
+            posts
+        )
+
+
         display_columns = [
             "id",
-            "dataset_id",
             "external_id",
             "original_text",
+            "original_label",
             "inserted_at"
         ]
 
-        available_display_columns = [
+
+        available_columns = [
             column
             for column in display_columns
             if column in df_posts.columns
         ]
 
+
+        column_names = {
+            "id": "ID",
+            "external_id": "ID externo",
+            "original_text": "Texto original",
+            "original_label": "Rótulo original",
+            "inserted_at": "Inserido em"
+        }
+
+
+        display_df = (
+            df_posts[
+                available_columns
+            ]
+            .rename(
+                columns=column_names
+            )
+        )
+
+
         st.dataframe(
-            df_posts[available_display_columns],
+            display_df,
             use_container_width=True,
             hide_index=True
         )
 
-        first_record = offset + 1
-        last_record = offset + len(posts)
+
+        first_record = (
+            offset + 1
+        )
+
+        last_record = (
+            offset
+            + len(posts)
+        )
+
 
         st.caption(
-            f"A apresentar os registos {first_record} a {last_record} "
-            f"de {total_records}. Página {page_number} de {total_pages}."
+            f"A apresentar os registos "
+            f"{first_record} a {last_record} "
+            f"de {total_records}. "
+            f"Página {int(page_number)} "
+            f"de {total_pages}."
         )
 
-    else:
-        st.info(
-            "Este dataset não possui publicações na página selecionada."
-        )
 
 except requests.exceptions.Timeout:
+
     st.error(
         "O backend demorou demasiado tempo a responder."
     )
 
+
 except requests.exceptions.ConnectionError:
+
     st.error(
         "Não foi possível ligar ao backend FastAPI. "
         f"Confirme que está em execução em {API_BASE_URL}."
     )
 
+
 except requests.exceptions.RequestException as error:
+
     st.error(
         "Ocorreu um erro durante a comunicação com o backend."
     )
-    st.code(str(error))
+
+    st.code(
+        str(error)
+    )
+
 
 except RuntimeError as error:
-    st.error(str(error))
+
+    st.error(
+        str(error)
+    )
+
 
 except Exception as error:
+
     st.error(
         f"Ocorreu um erro inesperado: {error}"
     )

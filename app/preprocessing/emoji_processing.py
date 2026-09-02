@@ -4,73 +4,106 @@ Operações de identificação e transformação de emojis.
 Este módulo disponibiliza funções auxiliares utilizadas pelo pipeline de
 pré-processamento para:
 
-- identificar emojis presentes numa publicação;
+- identificar emojis presentes num registo textual;
 - converter emojis numa representação textual.
 
-Os emojis constituem elementos relevantes para a análise afetiva, uma vez que
-podem complementar, reforçar ou alterar o significado emocional do texto.
+Os emojis constituem elementos potencialmente relevantes para análise afetiva,
+uma vez que podem complementar, reforçar ou modificar o significado emocional
+do conteúdo textual.
 """
+
 import emoji
 
 
-def extract_emojis(text: str) -> list[str]:
+def extract_emojis(
+    text: str
+) -> list[str]:
     """
     Extrai os emojis existentes num texto.
 
-    A função percorre o conteúdo recebido e devolve os caracteres reconhecidos
-    pela biblioteca ``emoji`` como emojis.
+    É utilizada a funcionalidade disponibilizada pela biblioteca ``emoji``
+    para reconhecer corretamente emojis simples e sequências compostas.
+
+    A ordem e as repetições existentes no texto são preservadas.
 
     Args:
-        text: Texto no qual os emojis serão identificados.
+        text:
+            Texto no qual os emojis serão identificados.
 
     Returns:
-        list[str]: Emojis encontrados, pela ordem em que surgem no texto.
-        Quando o valor recebido não é uma string, é devolvida uma lista vazia.
+        list[str]:
+            Emojis encontrados pela ordem em que surgem no texto.
+
+            Quando o valor recebido não é uma string, é devolvida
+            uma lista vazia.
 
     Example:
-        >>> extract_emojis("Estou muito feliz! 😄❤️")
-        ["😄", "❤"]
+        >>> extract_emojis("Estou feliz 😄❤️")
+        ["😄", "❤️"]
     """
 
-    # Garante que a função apenas tenta processar valores textuais.
     if not isinstance(text, str):
         return []
-    # Verifica individualmente os caracteres do texto e mantém apenas aqueles
-    # que se encontram registados como emojis pela biblioteca.    
-    if emoji is None:
-        return []
 
-    return [char for char in text if char in emoji.EMOJI_DATA]
+    emoji_items = emoji.emoji_list(
+        text
+    )
+
+    return [
+        item["emoji"]
+        for item in emoji_items
+    ]
 
 
-def convert_emojis_to_text(text: str) -> str:
+def count_emojis(
+    text: str
+) -> int:
+    """
+    Conta os emojis existentes num texto.
+
+    Args:
+        text:
+            Texto que será analisado.
+
+    Returns:
+        int:
+            Número de emojis encontrados.
+    """
+
+    return len(
+        extract_emojis(text)
+    )
+
+
+def convert_emojis_to_text(
+    text: str
+) -> str:
     """
     Converte os emojis existentes num texto para descrições textuais.
 
-    Esta transformação pode tornar a informação semântica dos emojis
-    explicitamente disponível para operações posteriores, como tokenização,
-    classificação emocional ou aplicação de modelos de aprendizagem automática.
+    Esta transformação torna explicitamente disponível a informação semântica
+    representada pelos emojis para operações posteriores, como tokenização
+    ou classificação emocional.
 
-    Atualmente, as descrições são produzidas em inglês.
+    Atualmente as descrições são produzidas em inglês.
 
     Args:
-        text: Texto que poderá conter emojis.
+        text:
+            Texto que poderá conter emojis.
 
     Returns:
-        str: Texto com os emojis convertidos para descrições textuais.
-        Quando o valor recebido não é uma string, é devolvido um texto vazio.
+        str:
+            Texto no qual os emojis foram convertidos para descrições.
 
     Example:
         >>> convert_emojis_to_text("Estou feliz 😄")
         "Estou feliz :grinning_face_with_smiling_eyes:"
-    """    
+    """
+
     if not isinstance(text, str):
         return ""
 
-    if emoji is None:
-        return text
-
-    # Converte os emojis para nomes delimitados por dois pontos.
-    #
-    # A opção language="en" determina que os nomes produzidos estejam em inglês.    
-    return emoji.demojize(text, language="en")
+    return emoji.demojize(
+        text,
+        language="en"
+    )

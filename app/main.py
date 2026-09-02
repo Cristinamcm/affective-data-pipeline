@@ -12,6 +12,9 @@ from fastapi import FastAPI
 
 from app.api.routes_datasets import router as datasets_router
 from app.api.routes_preprocessing import router as preprocessing_router
+from app.api.routes_affective import (
+    router as affective_router
+)
 
 
 # Instância principal da aplicação FastAPI.
@@ -38,6 +41,13 @@ app.include_router(datasets_router)
 # Este router deverá permitir iniciar execuções de pré-processamento,
 # definir configurações e consultar os respetivos resultados e métricas.
 app.include_router(preprocessing_router)
+
+
+# Regista os endpoints associados ao módulo de enriquecimento afetivo.
+#
+# Este router deverá permitir executar o enriquecimento afetivo, consultar
+# características extraídas e obter estatísticas agregadas.
+app.include_router(affective_router)
 
 
 @app.get("/health")

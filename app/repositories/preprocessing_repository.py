@@ -1,29 +1,65 @@
 """
-Operações de persistência e consulta do módulo de pré-processamento.
+Operações de persistência e consulta associadas ao módulo de processamento.
 
 Este módulo é responsável por:
 
-- obter as publicações utilizadas pelo pipeline;
-- criar execuções de pré-processamento;
-- guardar resultados individuais;
+- obter os registos utilizados pelo pipeline;
+- criar execuções de processamento;
+- registar as etapas executadas;
+- armazenar os resultados individuais;
+- armazenar métricas agregadas;
 - finalizar execuções;
-- consultar resultados;
-- calcular métricas agregadas.
+- consultar execuções, etapas, métricas e resultados.
 
-As consultas base de Dataset e Post encontram-se centralizadas no
-dataset_repository.py. Este módulo reutiliza essas operações para evitar
-duplicação de código.
+As consultas base relacionadas com Dataset e Post permanecem centralizadas
+no dataset_repository.py.
 """
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import case, func
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models.models import Post, ProcessedPost, ProcessingRun
+from app.models.models import (
+    PipelineMetric,
+    Post,
+    ProcessedPost,
+    ProcessingRun,
+    ProcessingStep
+)
 from app.repositories.dataset_repository import get_posts_by_dataset
+
+
+def _utc_now():
+    """
+    Devolve a data e hora atual em UTC.
+    """
+
+    return datetime.now(UTC)
+
+
+def _load_json(
+    value: str | None,
+    default: Any = None
+):
+    """
+    Desserializa um valor JSON armazenado como texto.
+    """
+
+    if value is None:
+        return default
+
+    try:
+        return json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return default
+
+
+# =============================================================================
+# CONSULTA DOS REGISTOS ORIGINAIS
+# =============================================================================
 
 
 def get_posts_by_dataset_page(
@@ -33,19 +69,7 @@ def get_posts_by_dataset_page(
     offset: int = 0
 ) -> list[Post]:
     """
-    Obtém uma página de publicações para utilização pelo módulo de processamento.
-
-    Esta função delega a consulta ao dataset_repository, evitando repetir
-    instruções SQLAlchemy em diferentes repositórios.
-
-    Args:
-        db: Sessão SQLAlchemy utilizada na consulta.
-        dataset_id: Identificador do dataset.
-        limit: Número máximo de publicações da página.
-        offset: Número de publicações anteriores a ignorar.
-
-    Returns:
-        list[Post]: Página de publicações solicitada.
+    Obtém uma página de registos para processamento.
     """
 
     return get_posts_by_dataset(
@@ -55,40 +79,32 @@ def get_posts_by_dataset_page(
         offset=offset
     )
 
+
 def get_all_posts_by_dataset(
     db: Session,
     dataset_id: int,
     page_size: int = 1000
 ) -> list[Post]:
     """
-    Obtém todas as publicações pertencentes a um dataset.
+    Obtém todos os registos pertencentes a um conjunto de dados.
 
-    As publicações são consultadas através de páginas para evitar uma única
-    consulta potencialmente demasiado extensa. No entanto, o resultado final
-    continua a ser reunido numa lista e permanece em memória.
+    A consulta é efetuada por páginas, embora o resultado final ainda seja
+    reunido numa lista.
 
-    Para datasets muito grandes, esta função deverá futuramente ser substituída
-    por um iterador ou por processamento integral em lotes.
-
-    Args:
-        db: Sessão SQLAlchemy utilizada na consulta.
-        dataset_id: Identificador do dataset.
-        page_size: Número de publicações consultadas em cada página.
-
-    Returns:
-        list[Post]: Todas as publicações pertencentes ao dataset.
-
-    Raises:
-        ValueError: Quando page_size é inferior a 1.
+    Futuramente esta função poderá ser substituída por processamento
+    integral em lotes para conjuntos de dados muito grandes.
     """
 
     if page_size < 1:
-        raise ValueError("The page size must be greater than zero")
+        raise ValueError(
+            "O tamanho da página deve ser superior a zero."
+        )
 
     all_posts: list[Post] = []
     offset = 0
 
     while True:
+
         posts_page = get_posts_by_dataset_page(
             db=db,
             dataset_id=dataset_id,
@@ -101,8 +117,6 @@ def get_all_posts_by_dataset(
 
         all_posts.extend(posts_page)
 
-        # Quando a página contém menos registos do que o limite solicitado,
-        # significa que foi alcançada a última página.
         if len(posts_page) < page_size:
             break
 
@@ -110,43 +124,48 @@ def get_all_posts_by_dataset(
 
     return all_posts
 
+
+# =============================================================================
+# EXECUÇÕES DE PROCESSAMENTO
+# =============================================================================
+
+
 def create_processing_run(
     db: Session,
     dataset_id: int,
     configuration_name: str,
     configuration_json: dict,
-    total_posts: int
+    total_posts: int,
+    pipeline_version: str = "1.0"
 ) -> ProcessingRun:
     """
-    Cria o registo de uma nova execução de pré-processamento.
+    Cria uma nova execução de processamento.
 
-    A configuração aplicada é serializada em JSON para preservar as operações
-    selecionadas pelo utilizador e garantir a rastreabilidade da execução.
-
-    Args:
-        db: Sessão SQLAlchemy utilizada na persistência.
-        dataset_id: Identificador do dataset processado.
-        configuration_name: Nome atribuído à configuração.
-        configuration_json: Configuração normalizada do pipeline.
-        total_posts: Número total de publicações existentes no dataset.
-
-    Returns:
-        ProcessingRun: Execução criada com o estado inicial ``started``.
+    A configuração é armazenada em JSON para garantir rastreabilidade
+    e permitir reproduzir posteriormente o mesmo processamento.
     """
-    
+
     run = ProcessingRun(
         dataset_id=dataset_id,
         configuration_name=configuration_name,
-        configuration_json=json.dumps(configuration_json, ensure_ascii=False),
+        configuration_json=json.dumps(
+            configuration_json,
+            ensure_ascii=False
+        ),
+        pipeline_version=pipeline_version,
         total_posts=total_posts,
+        processed_posts_count=0,
+        failed_posts_count=0,
+        duplicate_posts=0,
+        empty_after_processing=0,
         status="started"
     )
 
     try:
         db.add(run)
 
-        # O commit inicial garante que a execução fica registada antes de o
-        # processamento das publicações começar.
+        # A execução é confirmada imediatamente para garantir que existe
+        # um registo persistido mesmo que o processamento falhe depois.
         db.commit()
         db.refresh(run)
 
@@ -156,6 +175,112 @@ def create_processing_run(
         db.rollback()
         raise
 
+
+def finish_processing_run(
+    db: Session,
+    run: ProcessingRun,
+    processed_posts_count: int,
+    failed_posts_count: int,
+    duplicate_posts: int,
+    empty_after_processing: int,
+    duration_ms: int | None,
+    status: str = "completed",
+    error_message: str | None = None
+) -> ProcessingRun:
+    """
+    Finaliza uma execução de processamento.
+
+    O commit realizado nesta função confirma também os registos processados,
+    etapas e métricas adicionados anteriormente à sessão.
+    """
+
+    run.processed_posts_count = processed_posts_count
+    run.failed_posts_count = failed_posts_count
+    run.duplicate_posts = duplicate_posts
+    run.empty_after_processing = empty_after_processing
+    run.duration_ms = duration_ms
+    run.status = status
+    run.error_message = error_message
+    run.finished_at = _utc_now()
+
+    try:
+        db.commit()
+        db.refresh(run)
+
+        return run
+
+    except Exception:
+        db.rollback()
+        raise
+
+
+# =============================================================================
+# ETAPAS DE PROCESSAMENTO
+# =============================================================================
+
+
+def create_processing_step(
+    db: Session,
+    processing_run_id: int,
+    step_name: str,
+    step_order: int,
+    configuration_json: dict | None = None
+) -> ProcessingStep:
+    """
+    Regista uma operação selecionada para uma determinada execução.
+    """
+
+    step = ProcessingStep(
+        processing_run_id=processing_run_id,
+        step_name=step_name,
+        step_order=step_order,
+        configuration_json=(
+            json.dumps(
+                configuration_json,
+                ensure_ascii=False
+            )
+            if configuration_json is not None
+            else None
+        ),
+        status="started"
+    )
+
+    db.add(step)
+
+    # É necessário obter o ID antes do commit final.
+    db.flush()
+
+    return step
+
+
+def finish_processing_step(
+    db: Session,
+    step: ProcessingStep,
+    rows_received: int,
+    rows_changed: int,
+    rows_failed: int = 0,
+    duration_ms: int | None = None,
+    status: str = "completed"
+) -> ProcessingStep:
+    """
+    Atualiza uma etapa após a respetiva execução.
+    """
+
+    step.rows_received = rows_received
+    step.rows_changed = rows_changed
+    step.rows_failed = rows_failed
+    step.duration_ms = duration_ms
+    step.status = status
+    step.finished_at = _utc_now()
+
+    db.flush()
+
+    return step
+
+
+# =============================================================================
+# REGISTOS PROCESSADOS
+# =============================================================================
 
 
 def save_processed_post(
@@ -164,147 +289,146 @@ def save_processed_post(
     run: ProcessingRun,
     processed_data: dict[str, Any],
     is_duplicate: bool = False
-) -> None:
+) -> ProcessedPost:
     """
-    Adiciona à sessão o resultado do pré-processamento de uma publicação.
+    Adiciona à sessão o resultado do processamento de um registo.
 
-    O resultado é associado à publicação original e à execução que o produziu.
-    Esta função não executa commit. A confirmação dos dados é realizada quando
-    a execução termina.
+    Esta tabela contém apenas informação diretamente relacionada com
+    a preparação textual.
 
-    Args:
-        db: Sessão SQLAlchemy utilizada na persistência.
-        post: Publicação original que foi processada.
-        run: Execução responsável pelo resultado.
-        processed_data: Texto, elementos extraídos e métricas do pipeline.
-        is_duplicate: Indica se a publicação foi identificada como duplicada.
+    Emojis, hashtags e outros indicadores afetivos deixam de ser persistidos
+    nesta tabela, porque serão posteriormente armazenados no módulo de
+    enriquecimento afetivo.
     """
+
+    original_text = str(
+        processed_data.get(
+            "original_text",
+            post.original_text
+        )
+    )
+
+    processed_text = str(
+        processed_data.get(
+            "processed_text",
+            ""
+        )
+    )
+
+    tokens = processed_data.get("tokens", [])
+
+    original_word_count = processed_data.get(
+        "original_word_count"
+    )
+
+    if original_word_count is None:
+        original_word_count = (
+            len(original_text.split())
+            if original_text
+            else 0
+        )
+
+    processed_word_count = processed_data.get(
+        "processed_word_count"
+    )
+
+    if processed_word_count is None:
+        processed_word_count = processed_data.get(
+            "word_count"
+        )
+
+    if processed_word_count is None:
+        processed_word_count = (
+            len(processed_text.split())
+            if processed_text
+            else 0
+        )
 
     processed_post = ProcessedPost(
         post_id=post.id,
         processing_run_id=run.id,
 
-        # Conteúdo textual.
-        original_text=processed_data["original_text"],
-        processed_text=processed_data["processed_text"],
+        original_text=original_text,
+        processed_text=processed_text,
 
-        # Estruturas serializadas em JSON.
         tokens=json.dumps(
-            processed_data["tokens"],
-            ensure_ascii=False
-        ),
-        emojis=json.dumps(
-            processed_data["emojis"],
-            ensure_ascii=False
-        ),
-        hashtags=json.dumps(
-            processed_data["hashtags"],
-            ensure_ascii=False
-        ),
-        applied_steps=json.dumps(
-            processed_data["applied_steps"],
+            tokens,
             ensure_ascii=False
         ),
 
-        # Métricas gerais de dimensão e tokenização.
-        original_length=processed_data["original_length"],
-        processed_length=processed_data["processed_length"],
-        word_count=processed_data["word_count"],
-        token_count=processed_data["token_count"],
-
-        # Elementos identificados no texto original.
-        emoji_count=processed_data["emoji_count"],
-        hashtag_count=processed_data["hashtag_count"],
-        url_count=processed_data["url_count"],
-        mention_count=processed_data["mention_count"],
-
-        has_url=processed_data["has_url"],
-        has_mention=processed_data["has_mention"],
-        has_hashtag=processed_data["has_hashtag"],
-
-        # Métricas específicas das transformações aplicadas.
-        #
-        # O método get() assegura compatibilidade temporária caso uma versão
-        # anterior do pipeline ainda não devolva algum destes campos.
-        urls_removed_count=processed_data.get(
-            "urls_removed_count",
-            0
-        ),
-        urls_replaced_count=processed_data.get(
-            "urls_replaced_count",
-            0
-        ),
-        mentions_anonymized_count=processed_data.get(
-            "mentions_anonymized_count",
-            0
-        ),
-        hashtags_removed_count=processed_data.get(
-            "hashtags_removed_count",
-            0
-        ),
-        emojis_preserved_count=processed_data.get(
-            "emojis_preserved_count",
-            0
+        original_length=processed_data.get(
+            "original_length",
+            len(original_text)
         ),
 
-        # Indicadores de qualidade.
+        processed_length=processed_data.get(
+            "processed_length",
+            len(processed_text)
+        ),
+
+        original_word_count=original_word_count,
+        processed_word_count=processed_word_count,
+
+        token_count=processed_data.get(
+            "token_count",
+            len(tokens)
+        ),
+
         is_duplicate=is_duplicate,
-        is_empty_after_processing=processed_data[
-            "is_empty_after_processing"
-        ]
+
+        is_empty_after_processing=processed_data.get(
+            "is_empty_after_processing",
+            not bool(processed_text.strip())
+        )
     )
 
     db.add(processed_post)
 
+    return processed_post
 
-def finish_processing_run(
+
+# =============================================================================
+# MÉTRICAS
+# =============================================================================
+
+
+def save_pipeline_metric(
     db: Session,
-    run: ProcessingRun,
-    processed_posts_count: int,
-    duplicate_posts: int,
-    empty_after_processing: int,
-    status: str = "finished",
-    error_message: str | None = None
-) -> ProcessingRun:
+    processing_run_id: int,
+    metric_name: str,
+    metric_value: float,
+    numerator: int | None = None,
+    denominator: int | None = None,
+    unit: str | None = None,
+    description: str | None = None,
+    processing_step_id: int | None = None
+) -> PipelineMetric:
     """
-    Finaliza uma execução de pré-processamento.
+    Guarda uma métrica calculada durante uma execução.
 
-    Atualiza as métricas agregadas, o estado, a eventual mensagem de erro
-    e o momento de conclusão.
-
-    O commit confirma também os ProcessedPost que tenham sido adicionados
-    anteriormente à sessão.
-
-    Args:
-        db: Sessão SQLAlchemy utilizada na persistência.
-        run: Execução que será finalizada.
-        processed_posts_count: Número de publicações processadas.
-        duplicate_posts: Número de publicações duplicadas.
-        empty_after_processing: Número de textos que ficaram vazios.
-        status: Estado final da execução.
-        error_message: Mensagem do erro ocorrido, quando aplicável.
-
-    Returns:
-        ProcessingRun: Execução atualizada.
+    O numerador e denominador são preservados quando a métrica representa
+    uma proporção, permitindo manter os valores que deram origem ao resultado.
     """
 
-    run.processed_posts_count = processed_posts_count
-    run.duplicate_posts = duplicate_posts
-    run.empty_after_processing = empty_after_processing
-    run.status = status
-    run.error_message = error_message
-    run.finished_at = datetime.utcnow()
+    metric = PipelineMetric(
+        processing_run_id=processing_run_id,
+        processing_step_id=processing_step_id,
+        metric_name=metric_name,
+        metric_value=float(metric_value),
+        numerator=numerator,
+        denominator=denominator,
+        unit=unit,
+        description=description
+    )
 
-    try:
-        db.commit()
-        db.refresh(run)
+    db.add(metric)
 
-        return run
+    return metric
 
-    except Exception:
-        db.rollback()
-        raise
 
+# =============================================================================
+# CONSULTAS
+# =============================================================================
 
 
 def get_processing_runs_by_dataset(
@@ -312,22 +436,17 @@ def get_processing_runs_by_dataset(
     dataset_id: int
 ) -> list[ProcessingRun]:
     """
-    Obtém o histórico de execuções de pré-processamento de um dataset.
-
-    As execuções são ordenadas da mais recente para a mais antiga.
-
-    Args:
-        db: Sessão SQLAlchemy utilizada na consulta.
-        dataset_id: Identificador do dataset.
-
-    Returns:
-        list[ProcessingRun]: Execuções encontradas.
+    Obtém o histórico de execuções de um conjunto de dados.
     """
 
     return (
         db.query(ProcessingRun)
-        .filter(ProcessingRun.dataset_id == dataset_id)
-        .order_by(ProcessingRun.started_at.desc())
+        .filter(
+            ProcessingRun.dataset_id == dataset_id
+        )
+        .order_by(
+            ProcessingRun.started_at.desc()
+        )
         .all()
     )
 
@@ -337,20 +456,68 @@ def get_processing_run_by_id(
     processing_run_id: int
 ) -> ProcessingRun | None:
     """
-    Obtém uma execução de pré-processamento através do respetivo identificador.
-
-    Args:
-        db: Sessão SQLAlchemy utilizada na consulta.
-        processing_run_id: Identificador da execução.
-
-    Returns:
-        ProcessingRun | None: Execução encontrada ou ``None``.
+    Obtém uma execução através do respetivo identificador.
     """
 
     return (
         db.query(ProcessingRun)
-        .filter(ProcessingRun.id == processing_run_id)
+        .filter(
+            ProcessingRun.id == processing_run_id
+        )
         .first()
+    )
+
+
+def get_processing_steps_by_run(
+    db: Session,
+    processing_run_id: int
+) -> list[ProcessingStep]:
+    """
+    Obtém as etapas associadas a uma execução.
+    """
+
+    return (
+        db.query(ProcessingStep)
+        .filter(
+            ProcessingStep.processing_run_id
+            == processing_run_id
+        )
+        .order_by(
+            ProcessingStep.step_order.asc()
+        )
+        .all()
+    )
+
+
+def get_pipeline_metrics_by_run(
+    db: Session,
+    processing_run_id: int,
+    only_global: bool = False
+) -> list[PipelineMetric]:
+    """
+    Obtém as métricas associadas a uma execução.
+
+    Quando only_global=True, são devolvidas apenas as métricas que não estão
+    associadas a uma etapa específica.
+    """
+
+    query = (
+        db.query(PipelineMetric)
+        .filter(
+            PipelineMetric.processing_run_id
+            == processing_run_id
+        )
+    )
+
+    if only_global:
+        query = query.filter(
+            PipelineMetric.processing_step_id.is_(None)
+        )
+
+    return (
+        query
+        .order_by(PipelineMetric.id.asc())
+        .all()
     )
 
 
@@ -362,29 +529,27 @@ def get_processed_posts_by_run(
 ) -> list[ProcessedPost]:
     """
     Obtém uma página dos resultados produzidos por uma execução.
-
-    Args:
-        db: Sessão SQLAlchemy utilizada na consulta.
-        processing_run_id: Identificador da execução.
-        limit: Número máximo de resultados devolvidos.
-        offset: Número de resultados ignorados antes da página atual.
-
-    Returns:
-        list[ProcessedPost]: Resultados processados encontrados.
     """
 
     if limit < 1:
-        raise ValueError("The limit must be greater than zero")
+        raise ValueError(
+            "O limite deve ser superior a zero."
+        )
 
     if offset < 0:
-        raise ValueError("The offset cannot be negative")
+        raise ValueError(
+            "O offset não pode ser negativo."
+        )
 
     return (
         db.query(ProcessedPost)
         .filter(
-            ProcessedPost.processing_run_id == processing_run_id
+            ProcessedPost.processing_run_id
+            == processing_run_id
         )
-        .order_by(ProcessedPost.id.asc())
+        .order_by(
+            ProcessedPost.id.asc()
+        )
         .offset(offset)
         .limit(limit)
         .all()
@@ -396,129 +561,138 @@ def get_processing_run_summary(
     processing_run_id: int
 ) -> dict[str, Any] | None:
     """
-    Calcula o resumo e as métricas agregadas de uma execução.
+    Obtém o resumo de uma execução.
 
-    As métricas são calculadas diretamente na base de dados através de funções
-    SQL de agregação, evitando carregar todos os registos processados para a
-    memória da aplicação.
+    As métricas específicas do pipeline são obtidas da tabela
+    metricas_processamento.
 
-    Args:
-        db: Sessão SQLAlchemy utilizada na consulta.
-        processing_run_id: Identificador da execução.
-
-    Returns:
-        dict[str, Any] | None: Resumo da execução ou ``None`` quando não existe.
+    As médias diretamente relacionadas com os textos são calculadas
+    através da tabela registos_processados.
     """
 
-    run = get_processing_run_by_id(db, processing_run_id)
+    run = get_processing_run_by_id(
+        db=db,
+        processing_run_id=processing_run_id
+    )
 
     if run is None:
         return None
 
     summary = (
         db.query(
-            # 0 — Número de resultados armazenados.
             func.count(ProcessedPost.id),
 
-            # 1 a 4 — Médias relacionadas com o conteúdo textual.
-            func.avg(ProcessedPost.original_length),
-            func.avg(ProcessedPost.processed_length),
-            func.avg(ProcessedPost.word_count),
-            func.avg(ProcessedPost.token_count),
-
-            # 5 a 8 — Totais de elementos identificados.
-            func.sum(ProcessedPost.emoji_count),
-            func.sum(ProcessedPost.url_count),
-            func.sum(ProcessedPost.mention_count),
-            func.sum(ProcessedPost.hashtag_count),
-
-            # 9 a 11 — Publicações que continham cada tipo de elemento.
-            func.sum(
-                case(
-                    (ProcessedPost.has_url.is_(True), 1),
-                    else_=0
-                )
-            ),
-            func.sum(
-                case(
-                    (ProcessedPost.has_mention.is_(True), 1),
-                    else_=0
-                )
-            ),
-            func.sum(
-                case(
-                    (ProcessedPost.has_hashtag.is_(True), 1),
-                    else_=0
-                )
+            func.avg(
+                ProcessedPost.original_length
             ),
 
-            # 12 e 13 — Indicadores de qualidade.
-            func.sum(
-                case(
-                    (ProcessedPost.is_duplicate.is_(True), 1),
-                    else_=0
-                )
-            ),
-            func.sum(
-                case(
-                    (
-                        ProcessedPost.is_empty_after_processing.is_(True),
-                        1
-                    ),
-                    else_=0
-                )
+            func.avg(
+                ProcessedPost.processed_length
             ),
 
-            # 14 a 18 — Totais das transformações efetuadas pelo pipeline.
-            func.sum(ProcessedPost.urls_removed_count),
-            func.sum(ProcessedPost.urls_replaced_count),
-            func.sum(ProcessedPost.mentions_anonymized_count),
-            func.sum(ProcessedPost.hashtags_removed_count),
-            func.sum(ProcessedPost.emojis_preserved_count)
+            func.avg(
+                ProcessedPost.original_word_count
+            ),
+
+            func.avg(
+                ProcessedPost.processed_word_count
+            ),
+
+            func.avg(
+                ProcessedPost.token_count
+            )
         )
         .filter(
-            ProcessedPost.processing_run_id == processing_run_id
+            ProcessedPost.processing_run_id
+            == processing_run_id
         )
         .first()
     )
 
+    metrics = get_pipeline_metrics_by_run(
+        db=db,
+        processing_run_id=processing_run_id,
+        only_global=True
+    )
+
+    metrics_dict = {}
+
+    for metric in metrics:
+        metrics_dict[metric.metric_name] = {
+            "value": metric.metric_value,
+            "numerator": metric.numerator,
+            "denominator": metric.denominator,
+            "unit": metric.unit,
+            "description": metric.description
+        }
+
     return {
         "processing_run_id": run.id,
         "dataset_id": run.dataset_id,
-        "configuration_name": run.configuration_name,
-        "configuration_json": json.loads(run.configuration_json),
+
+        "configuration_name": (
+            run.configuration_name
+        ),
+
+        "configuration_json": _load_json(
+            run.configuration_json,
+            {}
+        ),
+
+        "pipeline_version": (
+            run.pipeline_version
+        ),
+
         "status": run.status,
+
         "total_posts": run.total_posts,
-        "processed_posts": run.processed_posts_count,
-        "duplicate_posts": run.duplicate_posts,
-        "empty_after_processing": run.empty_after_processing,
+
+        "processed_posts": (
+            run.processed_posts_count
+        ),
+
+        "failed_posts": (
+            run.failed_posts_count
+        ),
+
+        "duplicate_posts": (
+            run.duplicate_posts
+        ),
+
+        "empty_after_processing": (
+            run.empty_after_processing
+        ),
+
+        "duration_ms": run.duration_ms,
+
         "started_at": run.started_at,
         "finished_at": run.finished_at,
 
-        "metrics": {
-            "records": int(summary[0] or 0),
+        "text_statistics": {
+            "records": int(
+                summary[0] or 0
+            ),
 
-            "avg_original_length": float(summary[1] or 0),
-            "avg_processed_length": float(summary[2] or 0),
-            "avg_word_count": float(summary[3] or 0),
-            "avg_token_count": float(summary[4] or 0),
+            "avg_original_length": float(
+                summary[1] or 0
+            ),
 
-            "total_emojis": int(summary[5] or 0),
-            "total_urls": int(summary[6] or 0),
-            "total_mentions": int(summary[7] or 0),
-            "total_hashtags": int(summary[8] or 0),
+            "avg_processed_length": float(
+                summary[2] or 0
+            ),
 
-            "posts_with_url": int(summary[9] or 0),
-            "posts_with_mention": int(summary[10] or 0),
-            "posts_with_hashtag": int(summary[11] or 0),
+            "avg_original_word_count": float(
+                summary[3] or 0
+            ),
 
-            "duplicate_posts": int(summary[12] or 0),
-            "empty_after_processing": int(summary[13] or 0),
+            "avg_processed_word_count": float(
+                summary[4] or 0
+            ),
 
-            "urls_removed_count": int(summary[14] or 0),
-            "urls_replaced_count": int(summary[15] or 0),
-            "mentions_anonymized_count": int(summary[16] or 0),
-            "hashtags_removed_count": int(summary[17] or 0),
-            "emojis_preserved_count": int(summary[18] or 0)
-        }
+            "avg_token_count": float(
+                summary[5] or 0
+            )
+        },
+
+        "metrics": metrics_dict
     }
