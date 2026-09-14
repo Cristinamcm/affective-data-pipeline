@@ -122,39 +122,7 @@ def pagina_inicial():
 
     st.divider()
 
-    # -------------------------------------------------------------------------
-    # FLUXO CONCEPTUAL
-    # -------------------------------------------------------------------------
 
-    st.subheader(
-        "Pipeline do sistema"
-    )
-
-    st.markdown(
-        """
-        O fluxo implementado pelo protótipo segue, de forma simplificada,
-        a seguinte sequência:
-        """
-    )
-
-    st.code(
-        """
-Recolha de Dados
-        ↓
-Armazenamento dos Dados Brutos
-        ↓
-Pré-processamento Configurável
-        ↓
-Armazenamento dos Dados Processados
-        ↓
-Métricas e Avaliação do Pipeline
-        ↓
-Enriquecimento Afetivo
-        ↓
-Dados Estruturados para Análise Afetiva
-        """,
-        language=None
-    )
 
     st.info(
         "Utilize o menu lateral para aceder aos diferentes módulos "

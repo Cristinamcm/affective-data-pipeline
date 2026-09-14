@@ -2,7 +2,7 @@
 
 O Pipeline de Dados Afetivos é um sistema protótipo concebido para suportar a recolha, preparação, estruturação e armazenamento de dados afetivos provenientes das redes sociais.
 
-O sistema recebe dados de redes sociais em formato CSV ou JSON, armazena os dados brutos originais, aplica técnicas de pré-processamento e anonimização, extrai sinais afetivos relevantes e armazena os dados processados ​​num formato estruturado. Os dados resultantes podem então ser acedidos através de uma API REST, exportados para CSV/JSON ou visualizados num painel de controlo.
+O sistema recebe dados de redes sociais em formato CSV, armazena os dados brutos originais, aplica técnicas de pré-processamento e anonimização, extrai sinais afetivos relevantes e armazena os dados processados ​​num formato estruturado. Os dados resultantes podem então ser acedidos através de uma API REST, exportados para CSV ou visualizados num painel de controlo.
 
 ---
 
@@ -48,7 +48,7 @@ O sistema centra-se em:
 
 O protótipo atual suporta:
 
-- Importação de conjuntos de dados CSV/JSON;
+- Importação de conjuntos de dados CSV;
 
 - Armazenamento de dados brutos;
 
@@ -67,6 +67,7 @@ O protótipo atual suporta:
 - Geração de perfis afetivos;
 
 - Rastreio da execução do processamento;
+
 - Cálculo de métricas de qualidade;
 
 - Acesso à API REST;
@@ -85,15 +86,13 @@ O sistema segue uma arquitetura modular composta pelas seguintes camadas:
 
 Fonte de Dados
 ↓
-Conectores
-↓
 Armazenamento de Dados Brutos
 ↓
 Pipeline de Processamento
 ↓
 Pré-processamento
 ↓
-Extração de Sinais Afetivos
+Enriquecimento Afetivo
 ↓
 Armazenamento Estruturado
 ↓
